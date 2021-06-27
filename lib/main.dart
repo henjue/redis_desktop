@@ -1,18 +1,18 @@
-import 'dart:developer';
 import 'dart:io';
 
 import 'package:dartis/dartis.dart';
-import 'package:floor/floor.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_menu/flutter_menu.dart';
 import 'package:logging/logging.dart';
 import 'package:window_size/window_size.dart';
+
 import 'db/database.dart';
 import 'db/entity/host.dart';
 
 void main() {
-
+  // var bytes=[72, 89, 76, 76, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 70, 247, 128, 81, 211, 128, 68, 102, 128, 98, 201];
+  // var str=new String.fromCharCodes(bytes);
+  // print(str);
   WidgetsFlutterBinding.ensureInitialized();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     setWindowTitle('Redis Desktop Flutter');
@@ -26,7 +26,7 @@ class MyApp extends StatelessWidget {
   // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
-    Logger.root.level=Level.ALL;
+    Logger.root.level = Level.ALL;
     Logger.root.onRecord.listen((record) {
       print('${record.level.name}: ${record.time}: ${record.message}');
     });
@@ -81,8 +81,6 @@ class _MyHomePageState extends State<MyHomePage> {
       this.hosts.clear();
       this.hosts.addAll(hosts);
     });
-
-
   }
 
   Future<Host> addHost() async {
@@ -106,23 +104,22 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Client? _client;
+  Host? host;
 
-  fetchKeys(Host host) async {
-    print("fetchKeys ${host}\n");
-    await _client?.disconnect();
-    _client = await Client.connect('redis://${host.host}:${host.port}');
+  fetchKeys() async {
+    if (host == null) return;
     // Run some commands
     final commands = _client?.asCommands<String, String>();
-    if (host.pass?.isNotEmpty == true) {
-      await commands?.auth(host.pass);
+    if (host!.pass?.isNotEmpty == true) {
+      await commands?.auth(host!.pass);
     }
     final result = await _client?.asCommands<String, String>()?.keys("*") ?? [];
     final List<_RedisKey> keys = [];
 
     for (var key in result) {
-
-      String type = await _client?.asCommands<String, String>()?.type(key) ?? "";
-      if(type=='stream')continue;
+      String type =
+          await _client?.asCommands<String, String>()?.type(key) ?? "";
+      if (type == 'stream') continue;
       print('type:${type}  key:${key}\n');
       keys.add(_RedisKey(key, type));
     }
@@ -132,22 +129,34 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
-  Widget drawer() {
-    return Container(
-        color: Colors.amber,
-        child: ListView.builder(
-            itemCount: hosts.length,
-            itemBuilder: (BuildContext context, int index) {
-              return buildHostItem(context, index);
-            }));
+  Widget drawer(BuildContext context) {
+    return Drawer(
+      child: Container(
+          color: Colors.amber,
+          child: ListView.builder(
+              itemCount: hosts.length,
+              itemBuilder: (BuildContext context, int index) {
+                return buildHostItem(context, index);
+              })),
+    );
   }
 
   Widget buildHostItem(BuildContext context, int index) {
     return GestureDetector(
       child: Text("${hosts[index].host}:${hosts[index].port}"),
-      onDoubleTap: () {
-        fetchKeys(hosts[index]);
-        AppScreen.of(context).closeDrawer();
+      onDoubleTap: () async {
+        var host = hosts[index];
+        if (this.host == host) {
+          Navigator.of(context).pop();
+          return;
+        }
+        this.host = host;
+        await _client?.disconnect();
+        this._client =
+            await Client.connect('redis://${host.host}:${host.port}');
+        print("fetchKeys ${host}\n");
+        fetchKeys();
+        Navigator.of(context).pop();
       },
     );
   }
@@ -249,20 +258,20 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   _RedisKey? currentKey;
+
   Widget buildKeysList(BuildContext context) {
     Widget getType(String type) {
-      var color=Colors.amber;
-      if(type=='list'){
-        color=Colors.deepPurple;
-      }else if(type=='set'){
-        color=Colors.red;
-      }else if(type=='zset'){
-        color=Colors.green;
-      }else if(type=='hash'){
-        color=Colors.blue;
+      var color = Colors.amber;
+      if (type == 'list') {
+        color = Colors.deepPurple;
+      } else if (type == 'set') {
+        color = Colors.red;
+      } else if (type == 'zset') {
+        color = Colors.green;
+      } else if (type == 'hash') {
+        color = Colors.blue;
       }
-        return Container(
-          width: 50,
+      return Container(
           color: color,
           child: Text(
             type,
@@ -270,111 +279,144 @@ class _MyHomePageState extends State<MyHomePage> {
             style: TextStyle(
               color: Colors.white,
               fontWeight: FontWeight.bold,
-
             ),
           ));
     }
 
     return ListView.builder(
+        shrinkWrap: true,
+
+        scrollDirection: Axis.vertical,
         itemCount: keys.length,
         itemBuilder: (BuildContext context, int index) {
           var key = keys[index];
           return GestureDetector(
-            child: Row(
-              children: [Padding(
-                padding: const EdgeInsets.symmetric(vertical: 1.0,horizontal: 2.0),
-                child: getType(key.type),
-              ), Text("${key.value}")],
-            ),
             onTap: () async {
               onClickKey(key, index);
             },
+            child: Row(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 1.0, horizontal: 2.0),
+                  child: getType(key.type),
+                ),
+                Text("${key.value}")
+              ],
+            ),
           );
         });
   }
 
   void onClickKey(_RedisKey key, int index) async {
-
     print('get result by key(${key.type})==>${key.value}');
-    if(key.type=='string'){
-      var result=await _client?.asCommands<String, String>()?.get(key.value)??"";
+    if (key.type == 'string') {
+      var result =
+          await _client?.asCommands<String, String>()?.get(key.value) ?? "";
       setState(() {
-        this.contentString=result;
-        this.currentKey=key;
+        this.contentString = result;
+        this.currentKey = key;
       });
-    }else if(key.type=='list'){
-
-      var result=await _client?.asCommands<String, String>()?.lrange(key.value,0,-1)??[];
+    } else if (key.type == 'list') {
+      var result = await _client
+              ?.asCommands<String, String>()
+              ?.lrange(key.value, 0, -1) ??
+          [];
       setState(() {
-        this.contentList=result;
-        this.currentKey=key;
+        this.contentList = result;
+        this.currentKey = key;
       });
-    }else if(key.type=='set'){
-
-      var result=await _client?.asCommands<String, String>()?.smembers(key.value)??[];
+    } else if (key.type == 'set') {
+      var result =
+          await _client?.asCommands<String, String>()?.smembers(key.value) ??
+              [];
       setState(() {
-        this.contentSet=result;
-        this.currentKey=key;
+        this.contentSet = result;
+        this.currentKey = key;
       });
-    }else if(key.type=='zset'){
-
-      var result=await _client?.asCommands<String, String>()?.zscan(key.value,0);
+    } else if (key.type == 'zset') {
+      var result =
+          await _client?.asCommands<String, String>()?.zscan(key.value, 0);
       setState(() {
-        this.contentZSet=result?.members??new Map();
-        this.currentKey=key;
+        this.contentZSet = result?.members ?? new Map();
+        this.currentKey = key;
       });
-    }else if(key.type=='hash'){
-
-      var result=await _client?.asCommands<String, String>()?.hgetall(key.value);
+    } else if (key.type == 'hash') {
+      var result =
+          await _client?.asCommands<String, String>()?.hgetall(key.value);
       setState(() {
-        this.contentHash=result??new Map();
-        this.currentKey=key;
+        this.contentHash = result ?? new Map();
+        this.currentKey = key;
       });
-    }else{
+    } else {
       setState(() {
-        this.currentKey=key;
+        this.currentKey = key;
       });
     }
   }
-  String contentString="";
-  List<String> contentList=[];
-  List<String> contentSet=[];
-  Map<String,double> contentZSet=new Map();
-  Map<String,String> contentHash=new Map();
+
+  String contentString = "";
+  List<String> contentList = [];
+  List<String> contentSet = [];
+  Map<String, double> contentZSet = new Map();
+  Map<String, String> contentHash = new Map();
 
   Widget buildStringContent(BuildContext context) {
     return Text(contentString);
   }
+
   Widget buildListContent(BuildContext context) {
     return ListView.builder(
-      itemCount: contentList.length,
-        itemBuilder: (context,index){
-        return Text(contentList[index]);
-    });
+        itemCount: contentList.length,
+        itemBuilder: (context, index) {
+          return Text(contentList[index]);
+        });
   }
+
   Widget buildSetContent(BuildContext context) {
     return ListView.builder(
         itemCount: contentSet.length,
-        itemBuilder: (context,index){
+        itemBuilder: (context, index) {
           return Text(contentSet[index]);
         });
   }
+
   Widget buildZSetContent(BuildContext context) {
     return ListView.builder(
         itemCount: contentZSet.keys.length,
-        itemBuilder: (context,index){
+        itemBuilder: (context, index) {
           var list = contentZSet.keys.toList();
           return Text("${list[index]}===>${contentZSet[list[index]]}");
         });
   }
+
   Widget buildHashContent(BuildContext context) {
     return ListView.builder(
         itemCount: contentHash.keys.length,
-        itemBuilder: (context,index){
+        itemBuilder: (context, index) {
           var list = contentHash.keys.toList();
           return Text("${list[index]}===>${contentHash[list[index]]}");
         });
   }
+
+  Widget buildDetail(BuildContext context) {
+    if (this.currentKey?.type == 'string') {
+      return buildStringContent(context);
+    } else if (this.currentKey?.type == 'list') {
+      return buildListContent(context);
+    } else if (this.currentKey?.type == 'set') {
+      return buildSetContent(context);
+    }
+    if (this.currentKey?.type == 'zset') {
+      return buildZSetContent(context);
+    }
+    if (this.currentKey?.type == 'hash') {
+      return buildHashContent(context);
+    }
+    return Text("暂不支持此类型");
+  }
+
+  var keyPaneWidth = 100.0;
 
   @override
   Widget build(BuildContext context) {
@@ -385,59 +427,76 @@ class _MyHomePageState extends State<MyHomePage> {
     // fast, so that you can just rebuild anything that needs updating rather
     // than having to individually change instances of widgets.
     return Scaffold(
-        appBar: null,
-        body: AppScreen(
-          masterPane: Builder(
-            builder: (BuildContext context) {
-              return buildKeysList(context);
+      appBar: AppBar(
+        actions: [
+
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () {
+              fetchKeys();
             },
           ),
-          masterPaneMinWidth: 200,
-          detailPane: Builder(
-            builder: (BuildContext context) {
-              if(this.currentKey?.type=='string'){
-                return buildStringContent(context);
-              }else if(this.currentKey?.type=='list'){
-                return buildListContent(context);
-              }else if(this.currentKey?.type=='set'){
-                return buildSetContent(context);
-              }if(this.currentKey?.type=='zset'){
-                return buildZSetContent(context);
-              }if(this.currentKey?.type=='hash'){
-                return buildHashContent(context);
-              }
-              return Text("暂不支持此类型");
+          IconButton(
+            icon: const Icon(Icons.add_alert),
+            onPressed: () {
+              showAddHostDialog(context);
             },
           ),
-          drawer: AppDrawer(
-            defaultSmall: false,
-            largeDrawerWidth: 200,
-            largeDrawer: drawer(),
-          ),
-          menuList: [
-            MenuItem(title: 'File', menuListItems: [
-              MenuListItem(
-                icon: Icons.open_in_new,
-                title: 'Add Host',
-                onPressed: () {
-                  showAddHostDialog(context);
-                },
-                shortcut:
-                    MenuShortcut(key: LogicalKeyboardKey.keyO, ctrl: true),
+        ],
+      ),
+      drawer: drawer(context),
+      body: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                height: constraints.maxHeight,
+                width: keyPaneWidth,
+                color: Colors.blue,
+                child: Scrollbar(
+                  isAlwaysShown: true,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Container(
+                      width: constraints.maxWidth,
+                      child: buildKeysList(context),
+                    ),
+                  ),
+                ),
               ),
-              MenuListItem(
-                icon: Icons.exit_to_app,
-                title: 'Exit',
-                onPressed: () {
-                  exit(0);
-                },
-                shortcut:
-                    MenuShortcut(key: LogicalKeyboardKey.keyW, ctrl: true),
+              MouseRegion(
+                cursor: SystemMouseCursors.move,
+                child: GestureDetector(
+                  onPanUpdate: (details) {
+                    print(
+                        "maxwidth:${constraints.maxWidth}\ndx:${details.delta.dx}\keyPaneWidth:${keyPaneWidth}");
+                    var newWidth = keyPaneWidth + details.delta.dx;
+                    if (newWidth > 100 &&
+                        newWidth < constraints.maxWidth - 100) {
+                      setState(() {
+                        keyPaneWidth = newWidth;
+                      });
+                    }
+                  },
+                  child: Container(
+                    color: Colors.cyan,
+                    height: 999999,
+                    child: Divider(
+                      indent: 5,
+                    ),
+                  ),
+                ),
               ),
-            ])
-          ],
-        )
-        // This trailing comma makes auto-formatting nicer for build methods.
-        );
+              Expanded(
+                flex: 1,
+                child: buildDetail(context),
+              ),
+            ],
+          );
+        },
+      ),
+      // This trailing comma makes auto-formatting nicer for build methods.
+    );
   }
 }
